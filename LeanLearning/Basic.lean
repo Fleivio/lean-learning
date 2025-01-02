@@ -106,4 +106,4 @@ open N
 #eval isEven z
 #eval isEven (s z)
 #eval isEven (s (s z))
-#eval isEven (s (s z)+.+(s z))
+#eval isEven (s (s z) +.+ (s z))
