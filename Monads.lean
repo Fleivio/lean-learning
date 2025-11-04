@@ -93,6 +93,8 @@ def State.bind : (State γ α) → (α → State γ β) → State γ β
 
 def State.get : State γ γ := ⟨λg => (g,g)⟩
 
+def State.modify (f : γ → γ) : State γ Unit
+  := .mk λg => (f g, ())
 
 instance : Monad (State γ) where
   pure := State.pure
@@ -226,8 +228,135 @@ def divExcept (x : Int) (y : Int) : Except String Int :=
       Except.error s!"Tried to divide {x} by zero"
     else pure (x / y)
 
-
 #eval eval divOption $ prim div (const 3) (const 1)
 #eval eval divExcept $ prim div (const 3) (const 0)
 
 end Expressions
+
+section ManyMonad
+inductive Many (α : Type) where
+  | none : Many α
+  | more : α → (Unit → Many α) → Many α
+
+open Many
+
+def Many.pure (a : α) : Many α := more a (λ() => none)
+
+def Many.append : Many α → Many α → Many α
+    | Many.none, y => y
+    | Many.more x xs, y => Many.more x (λu => append (xs u) y)
+
+instance : Append (Many α) where
+  append := Many.append
+
+def Many.fromList : List α → Many α
+  | [] => .none
+  | x::xs => .more x (λ() => Many.fromList xs)
+
+def Many.take : Nat → Many α → List α
+  | 0, _ | _, Many.none => []
+  | n+1, Many.more x xs => x::Many.take n (xs ())
+
+def Many.takeAll : Many α → List α
+  | .none => []
+  | .more x xs => x :: Many.takeAll (xs ())
+
+instance [ToString α] : ToString (Many α) where
+  toString x := toString $ takeAll x
+
+def Many.map (f : α → β) : Many α → Many β
+  | .none => .none
+  | .more x xs => .more (f x) (λu => Many.map f (xs u))
+
+def Many.seq : (Many (α → β)) → (Unit → Many α) → Many β
+  | .none, _ => .none
+  | .more f fs, xs => Many.map f (xs ()) ++ Many.seq (fs ()) xs
+
+def Many.bind : Many α → (α → Many β) → Many β
+  | .none, _ => .none
+  | .more x xs, f => f x ++ Many.bind (xs ()) f
+
+instance : Functor Many where
+  map := Many.map
+
+instance : Applicative Many where
+  seq := Many.seq
+  pure := Many.pure
+
+instance : Monad Many where
+  bind := Many.bind
+  pure := Many.pure
+
+def addsTo (goal : Nat) : List Nat → Many (List Nat)
+  | [] => if goal == 0 then Many.pure [] else .none
+  | x::xs =>
+    if x > goal
+    then
+      (addsTo goal xs)
+    else do
+      (.cons x <$> addsTo (goal - x) xs) ++ (addsTo goal xs)
+
+#eval takeAll $ addsTo 10 [1,2,3,5]
+
+end ManyMonad
+
+def cartesianProduct (a : Many α) (b : Many β) : Many (α × β)
+  := do
+    let as ← a
+    let bs ← b
+    return (as, bs)
+
+macro "!" x:term "!" : term => `(Many.fromList $x)
+
+#eval IO.print $ cartesianProduct ![1,2]! ![5,6]!
+
+--
+
+structure Stack (α : Type) where
+  stack : List α
+deriving Repr
+
+abbrev StackOP α β := StateT (Stack α) (Except String) β
+
+def Stack.length : StackOP α Nat
+  := do
+    let s ← get
+    pure s.stack.length
+
+def Stack.push (a : α) : StackOP α Unit
+  := modify λs => {s with stack := a::s.stack}
+
+def Stack.pop : StackOP α α
+  := do
+    let s ← get
+    match s.stack with
+    | []    => throw "Empty stack on pop"
+    | x::xs => set {s with stack := xs}
+               pure x
+
+def Stack.op (f : α → α → α) : StackOP α Unit
+  := do
+    let s ← get
+    match s.stack with
+    | [] | _::[] => throw "Empty stack on binary operations"
+    | x::y::xs => set $ {s with stack := f x y :: xs}
+
+def Stack.foldAux (f : α → α → α) (init : α) (s : Stack α) : α
+  := s.stack.foldl f init
+
+def Stack.fold (f : α → α → α) (init : α) : StackOP α Unit
+  := do
+    let s ← get
+    let res := Stack.foldAux f init s
+    set $ Stack.mk [res]
+
+#check List.foldl
+
+open Stack
+def test : StackOP Float Unit := do
+  push 1
+  push 4
+  _ ← op Float.add
+  op Float.div
+
+#eval test.run (Stack.mk [2])

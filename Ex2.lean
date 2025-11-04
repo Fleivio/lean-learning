@@ -319,3 +319,22 @@ instance : Functor (Const α) where
 #check Array.foldl
 
 #print Monad
+
+macro "perhaps" x:term "maybe" y:term : term => `(($x) <|> ($y))
+
+#eval perhaps none
+      maybe some 2
+
+#eval perhaps some 1
+      maybe none
+
+def safeDiv : Nat → Nat → Option Nat
+  | _, 0 => none
+  | a, b => some (a/b)
+
+#eval perhaps safeDiv 2 0
+      maybe some 1
+
+#check List.head [1] (by simp)
+
+#check Prop
